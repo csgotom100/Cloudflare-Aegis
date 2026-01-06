@@ -1,0 +1,2 @@
+https://api.uouin.com/cloudflare.html
+https://stock.hostmonit.com/CloudFlareYes
