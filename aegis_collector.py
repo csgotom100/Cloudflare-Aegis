@@ -2,7 +2,7 @@ import requests
 import json
 import os
 import re
-from github import Github, Auth  # 修复警告
+from github import Github, Auth
 from datetime import datetime
 
 # --- 配置 ---
@@ -38,26 +38,26 @@ def fetch_ips():
 
 def update_repo(ips_list):
     if not ips_list:
-        print("停止更新：本次未获取到任何 IP")
         return
 
-    # 修复 DeprecationWarning
     auth = Auth.Token(GITHUB_TOKEN)
     g = Github(auth=auth)
     repo = g.get_repo(REPO_NAME)
     
-    # 获取旧数据
+    # 1. 尝试获取旧数据及其 SHA
+    json_sha = None
+    db = {"last_update": "", "pool": {}}
+    
     try:
         contents = repo.get_contents(FILE_JSON)
         db = json.loads(contents.decoded_content.decode())
-        # 核心修复：确保 db['pool'] 是字典而不是列表
+        json_sha = contents.sha
         if not isinstance(db.get('pool'), dict):
-            print("⚠️ 检测到旧版格式，正在重置为字典格式...")
             db['pool'] = {}
     except:
-        db = {"last_update": "", "pool": {}}
+        print(f"ℹ️ {FILE_JSON} 不存在，将创建新文件")
 
-    # 更新数据
+    # 2. 合并新 IP
     for ip in ips_list:
         if ip not in db['pool']:
             db['pool'][ip] = {
@@ -69,29 +69,27 @@ def update_repo(ips_list):
     db['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     json_str = json.dumps(db, indent=2)
 
-    # 生成文本清单
-    txt_content = f"# 弹药库预览 (最后更新: {db['last_update']})\n"
-    txt_content += f"# 总计数量: {len(db['pool'])}\n\n"
+    # 3. 准备 TXT 预览
+    txt_content = f"# 弹药库预览 (更新日期: {db['last_update']})\n# 总计: {len(db['pool'])}\n\n"
     txt_content += "\n".join(sorted(db['pool'].keys()))
 
-    # 提交
-    print(f"🚀 准备提交至仓库...")
+    # 4. 提交数据
+    print(f"🚀 准备同步到 GitHub...")
     
     # 提交 JSON
-    try:
-        repo.update_file(FILE_JSON, "Update JSON Pool", json_str, contents.sha)
-    except Exception as e:
-        print(f"JSON 提交失败: {e}")
-        repo.create_file(FILE_JSON, "Create JSON Pool", json_str)
+    if json_sha:
+        repo.update_file(FILE_JSON, "Sync JSON Pool", json_str, json_sha)
+    else:
+        repo.create_file(FILE_JSON, "Init JSON Pool", json_str)
 
-    # 提交 TXT
+    # 提交 TXT (获取最新的 TXT SHA)
     try:
         txt_file = repo.get_contents(FILE_TXT)
-        repo.update_file(FILE_TXT, "Update TXT View", txt_content, txt_file.sha)
+        repo.update_file(FILE_TXT, "Sync TXT View", txt_content, txt_file.sha)
     except:
-        repo.create_file(FILE_TXT, "Create TXT View", txt_content)
+        repo.create_file(FILE_TXT, "Init TXT View", txt_content)
     
-    print("🔥 成功！请刷新仓库页面查看 ips_txt_view.txt")
+    print("🔥 大功告成！")
 
 if __name__ == "__main__":
     found_list = fetch_ips()
