@@ -1,2 +1,6 @@
 https://api.uouin.com/cloudflare.html
 https://stock.hostmonit.com/CloudFlareYes
+https://raw.githubusercontent.com/Alvin9999/new-pac/master/CloudFlare%E4%BC%98%E9%80%89IP
+https://raw.githubusercontent.com/vfarid/cf-ip-scanner/main/ips.txt
+https://raw.githubusercontent.com/ymyuuu/IPDB/main/cloudflare.txt
+https://stock.hostmonit.com/CloudFlareYes
