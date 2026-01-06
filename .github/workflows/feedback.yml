@@ -3,21 +3,42 @@ on:
   issues:
     types: [opened]
 
+# 强制排队，防止并发冲突
+concurrency:
+  group: feedback-processing
+  cancel-in-progress: false
+
 jobs:
   handle-report:
-    if: startsWith(github.event.issue.title, 'FEEDBACK:')
+    if: startsWith(github.event.issue.title, 'FEEDBACK')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install PyGithub requests
+
       - name: Process Feedback
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 提取标题中的 IP
-          IP=$(echo "${{ github.event.issue.title }}" | sed 's/FEEDBACK: //g' | xargs)
+          # 提取 IP 逻辑
+          IP=$(echo "${{ github.event.issue.title }}" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -n 1)
+          if [ -z "$IP" ]; then
+            echo "❌ 未检测到有效 IP"
+            exit 0
+          fi
+          echo "🎯 正在处理反馈 IP: $IP"
           python process_report.py $IP
+
       - name: Close Issue
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue close ${{ github.event.issue.number }} --comment "反馈已记录。若该 IP 反馈次数达标，将自动禁闭 24 小时。"
+          gh issue close ${{ github.event.issue.number }} --comment "反馈已处理，该 IP 已执行禁闭逻辑。"
