@@ -2,9 +2,10 @@
   "last_update": "2026-01-06 14:25",
   "pool": {
     "1.0.1.1": {
-      "score": 100,
-      "fail_count": 0,
-      "added_at": "2026-01-06"
+      "score": 0,
+      "fail_count": 1,
+      "added_at": "2026-01-06",
+      "ban_until": 1767798127
     },
     "1.2.1.1": {
       "score": 100,
