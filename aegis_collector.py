@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import re
+import time
 from github import Github, Auth
 from datetime import datetime
 
@@ -43,11 +44,11 @@ def update_repo(ips_list):
     auth = Auth.Token(GITHUB_TOKEN)
     g = Github(auth=auth)
     repo = g.get_repo(REPO_NAME)
+    now_ts = int(time.time())
     
-    # 1. 尝试获取旧数据及其 SHA
+    # 1. 获取旧数据
     json_sha = None
     db = {"last_update": "", "pool": {}}
-    
     try:
         contents = repo.get_contents(FILE_JSON)
         db = json.loads(contents.decoded_content.decode())
@@ -55,41 +56,53 @@ def update_repo(ips_list):
         if not isinstance(db.get('pool'), dict):
             db['pool'] = {}
     except:
-        print(f"ℹ️ {FILE_JSON} 不存在，将创建新文件")
+        print(f"ℹ️ 创建新库文件")
 
-    # 2. 合并新 IP
+    # 2. 逻辑 A：处理禁闭到期与解封
+    for ip, info in list(db['pool'].items()):
+        ban_until = info.get('ban_until', 0)
+        if ban_until > 0 and now_ts > ban_until:
+            print(f"✨ IP {ip} 禁闭期满，已恢复。")
+            db['pool'][ip]['score'] = 100
+            db['pool'][ip]['fail_count'] = 0
+            db['pool'][ip]['ban_until'] = 0
+
+    # 3. 逻辑 B：合并新抓取的 IP
     for ip in ips_list:
         if ip not in db['pool']:
             db['pool'][ip] = {
                 "score": 100, 
                 "fail_count": 0, 
+                "ban_until": 0,
                 "added_at": datetime.now().strftime("%Y-%m-%d")
             }
+        elif db['pool'][ip]['ban_until'] == 0:
+            # 如果没在禁闭期，确保它是活跃状态
+            db['pool'][ip]['score'] = 100
     
     db['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    json_str = json.dumps(db, indent=2)
-
-    # 3. 准备 TXT 预览
-    txt_content = f"# 弹药库预览 (更新日期: {db['last_update']})\n# 总计: {len(db['pool'])}\n\n"
-    txt_content += "\n".join(sorted(db['pool'].keys()))
-
-    # 4. 提交数据
-    print(f"🚀 准备同步到 GitHub...")
     
-    # 提交 JSON
-    if json_sha:
-        repo.update_file(FILE_JSON, "Sync JSON Pool", json_str, json_sha)
-    else:
-        repo.create_file(FILE_JSON, "Init JSON Pool", json_str)
+    # 4. 生成给客户端看的精选列表 (过滤掉禁闭中的)
+    active_ips = [ip for ip, info in db['pool'].items() if info.get('ban_until', 0) == 0]
+    txt_content = f"# 活跃弹药库 (更新: {db['last_update']})\n# 总活跃数: {len(active_ips)}\n\n"
+    txt_content += "\n".join(sorted(active_ips))
 
-    # 提交 TXT (获取最新的 TXT SHA)
+    # 5. 提交
+    print(f"🚀 正在同步至仓库...")
+    json_str = json.dumps(db, indent=2)
+    
+    if json_sha:
+        repo.update_file(FILE_JSON, "Collector Sync", json_str, json_sha)
+    else:
+        repo.create_file(FILE_JSON, "Collector Init", json_str)
+
     try:
         txt_file = repo.get_contents(FILE_TXT)
-        repo.update_file(FILE_TXT, "Sync TXT View", txt_content, txt_file.sha)
+        repo.update_file(FILE_TXT, "Update View", txt_content, txt_file.sha)
     except:
-        repo.create_file(FILE_TXT, "Init TXT View", txt_content)
+        repo.create_file(FILE_TXT, "Create View", txt_content)
     
-    print("🔥 大功告成！")
+    print(f"🔥 完成！当前活跃 IP: {len(active_ips)}")
 
 if __name__ == "__main__":
     found_list = fetch_ips()
