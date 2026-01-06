@@ -1,0 +1,23 @@
+name: Aegis Auto-Ban System
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  handle-report:
+    if: startsWith(github.event.issue.title, 'FEEDBACK:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Process Feedback
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 提取标题中的 IP
+          IP=$(echo "${{ github.event.issue.title }}" | sed 's/FEEDBACK: //g' | xargs)
+          python process_report.py $IP
+      - name: Close Issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue close ${{ github.event.issue.number }} --comment "反馈已记录。若该 IP 反馈次数达标，将自动禁闭 24 小时。"
