@@ -35,7 +35,27 @@ def apply_penalty(ip):
             msg = f"⚠️ IP {ip} 当前累计反馈: {count}/{BAN_THRESHOLD}"
         
         print(msg)
-        # 3. 提交更新
+        
+        # 3. 实时重新生成 TXT 预览逻辑 (同步更新)
+        FILE_TXT = "ips_txt_view.txt"
+        active_ips = [ip for ip, info in db['pool'].items() if info.get('ban_until', 0) == 0]
+        
+        txt_content = f"# 活跃弹药库 (更新: {datetime.now().strftime('%Y-%m-%d %H:%M')})\n# 总活跃数: {len(active_ips)}\n\n"
+        txt_content += "\n".join(sorted(active_ips))
+        
+        # 4. 提交更新 (JSON 和 TXT)
+        print(f"🚀 正在实时同步 TXT 预览...")
+        # 更新 JSON
+        repo.update_file(contents.path, f"Penalty: {ip}", json.dumps(db, indent=2), contents.sha)
+        
+        # 更新 TXT
+        try:
+            txt_file = repo.get_contents(FILE_TXT)
+            repo.update_file(FILE_TXT, "Feedback Sync View", txt_content, txt_file.sha)
+        except:
+            repo.create_file(FILE_TXT, "Init View", txt_content)
+            
+        print(msg)
         repo.update_file(contents.path, f"Penalty: {ip}", json.dumps(db, indent=2), contents.sha)
     else:
         print(f"IP {ip} 不在库中，可能是已经被清理或拼写错误。")
