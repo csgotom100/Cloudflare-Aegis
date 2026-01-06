@@ -58,8 +58,9 @@ def update_repo(ips_list):
     except:
         print(f"ℹ️ 创建新库文件")
 
-    # 2. 逻辑 A：处理禁闭到期与解封
+    # 2. 逻辑 A：处理禁闭到期与解封 (增加安全检查)
     for ip, info in list(db['pool'].items()):
+        # 使用 .get(key, default) 防止 KeyError
         ban_until = info.get('ban_until', 0)
         if ban_until > 0 and now_ts > ban_until:
             print(f"✨ IP {ip} 禁闭期满，已恢复。")
@@ -76,13 +77,13 @@ def update_repo(ips_list):
                 "ban_until": 0,
                 "added_at": datetime.now().strftime("%Y-%m-%d")
             }
-        elif db['pool'][ip]['ban_until'] == 0:
-            # 如果没在禁闭期，确保它是活跃状态
+        # 修复此处：使用 .get() 安全判断是否在禁闭期
+        elif db['pool'][ip].get('ban_until', 0) == 0:
             db['pool'][ip]['score'] = 100
     
     db['last_update'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # 4. 生成给客户端看的精选列表 (过滤掉禁闭中的)
+    # 4. 生成预览列表 (只包含活跃且未禁闭的 IP)
     active_ips = [ip for ip, info in db['pool'].items() if info.get('ban_until', 0) == 0]
     txt_content = f"# 活跃弹药库 (更新: {db['last_update']})\n# 总活跃数: {len(active_ips)}\n\n"
     txt_content += "\n".join(sorted(active_ips))
