@@ -15,7 +15,7 @@ FILE_TXT = "ips_txt_view.txt"
 # Cloudflare Workers 配置
 WORKER_URL = "https://nameless-cherry-bb9c.2412.workers.dev/push-pool"
 # 注意：这里的 AUTH_KEY 必须和你在 Workers 脚本里定义的 authKey 完全一致
-WORKER_AUTH_KEY = "设置一个你的通信密钥" 
+WORKER_AUTH_KEY = "my-secret-aegis" 
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
