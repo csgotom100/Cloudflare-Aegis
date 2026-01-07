@@ -1,52 +1,86 @@
-import requests, json, os, re, time
-from github import Github, Auth
-from datetime import datetime
+import requests
+import os
+import random
+import re
+import json
+import time
 
 # ================= 配置区 =================
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO_NAME = os.getenv("GITHUB_REPOSITORY")
-FILE_JSON = "ip_pool.json"
-WORKER_URL = "https://nameless-cherry-bb9c.2412.workers.dev/push-pool"
-WORKER_AUTH_KEY = "my-secret-aegis"
-HARD_BLACKLIST = {"1.0.1.1", "1.2.1.1", "1.1.1.1", "0.0.0.0"}
-# ==========================================
+WORKER_URL = "https://ip.usub.de5.net/update" 
+API_KEY = "your_secret_password_here"  # 必须与 Worker 中的 MASTER_KEY 一致
+LOCAL_FILE = "sources.txt"             # 你手动维护的高质量 IP
+SOURCE_URLS = [
+    "https://raw.githubusercontent.com/Alvin9999/new-pac/master/cloudflare/ip.txt",
+    "https://raw.githubusercontent.com/vfarid/v2ray-worker-proxy/main/ips.txt"
+]
+# 黑名单：剔除 1.0.0.1, 1.1.1.1 等公共 DNS
+IP_BLACKLIST = [
+    "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "1.1.1.2", "1.0.0.2",
+    "1.1.1.3", "1.0.0.3", "9.9.9.9", "149.112.112.112"
+]
+# =========================================
 
-def extract_ips(text):
-    found = re.findall(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', text)
-    return {ip for ip in found if ip not in HARD_BLACKLIST}
+def is_valid_ip(ip):
+    ip = ip.strip()
+    pattern = r'^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$'
+    if not re.match(pattern, ip) or ip in IP_BLACKLIST:
+        return False
+    if ip.startswith(("127.", "192.168.", "10.", "172.16.")):
+        return False
+    return True
 
 def fetch_ips():
-    all_found = set()
-    sources = ["https://api.uouin.com/cloudflare.html", "https://stock.hostmonit.com/CloudFlareYes"]
-    for url in sources:
+    all_ips = set()
+    # 1. 读取本地保底文件
+    if os.path.exists(LOCAL_FILE):
+        with open(LOCAL_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                for p in line.replace(',', ' ').split():
+                    if is_valid_ip(p): all_ips.add(p)
+    
+    # 2. 抓取远程优选源
+    for url in SOURCE_URLS:
         try:
-            resp = requests.get(url, timeout=15)
-            all_found.update(extract_ips(resp.text))
-        except: pass
-    return all_found
+            res = requests.get(url, timeout=10)
+            for p in res.text.replace(',', ' ').replace('\n', ' ').replace('\r', ' ').split():
+                if is_valid_ip(p): all_ips.add(p)
+        except: continue
+    return list(all_ips)
 
-def update_and_push():
-    found_ips = fetch_ips()
-    if not found_ips: return
+def save_and_push():
+    ip_list = fetch_ips()
     
-    auth = Auth.Token(GITHUB_TOKEN)
-    repo = Github(auth=auth).get_repo(REPO_NAME)
-    update_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # 保底逻辑：如果新抓取的太少，尝试合并旧的 ips.txt
+    if len(ip_list) < 20 and os.path.exists("ips.txt"):
+        with open("ips.txt", "r") as f:
+            old_ips = [line.strip() for line in f if is_valid_ip(line)]
+            ip_list = list(set(ip_list) | set(old_ips))
 
-    # 更新 JSON 数据库
-    active_ips = sorted(list(found_ips))
-    db_to_save = {"last_update": update_time, "pool": active_ips}
-    json_str = json.dumps(db_to_save, indent=2)
-    
+    if not ip_list:
+        print("❌ 错误：未获取到任何有效 IP")
+        return
+
+    # 随机挑选，有多少拿多少，上限 40
+    selected_ips = random.sample(ip_list, min(len(ip_list), 40))
+
+    # 生成 TXT 备份
+    with open("ips.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(selected_ips))
+
+    # 生成 JSON 备份
+    with open("ips.json", "w", encoding="utf-8") as f:
+        json.dump({
+            "update_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total_found": len(ip_list),
+            "ips": selected_ips
+        }, f, indent=4)
+
+    # 推送至 Worker
     try:
-        contents = repo.get_contents(FILE_JSON)
-        repo.update_file(FILE_JSON, f"Sync {update_time}", json_str, contents.sha)
-    except:
-        repo.create_file(FILE_JSON, "Init DB", json_str)
-
-    # 推送给 Worker
-    requests.post(WORKER_URL, json={"ips": active_ips}, headers={"Authorization": WORKER_AUTH_KEY})
-    print(f"🚀 已推送 {len(active_ips)} 个 IP")
+        r = requests.post(WORKER_URL, json={"key": API_KEY, "ips": selected_ips}, timeout=15)
+        print(f"✅ 推送成功: {r.status_code}, 弹药量: {len(selected_ips)}")
+    except Exception as e:
+        print(f"❌ 推送失败: {e}")
 
 if __name__ == "__main__":
-    update_and_push()
+    save_and_push()
