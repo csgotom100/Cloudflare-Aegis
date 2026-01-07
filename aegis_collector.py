@@ -7,111 +7,107 @@ from github import Github, Auth
 from datetime import datetime
 
 # --- 配置区 ---
-# 这些变量会从 GitHub Actions 的环境变量中自动读取
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 REPO_NAME = os.getenv("GITHUB_REPOSITORY")
 FILE_JSON = "ip_pool.json"
 FILE_TXT = "ips_txt_view.txt"
 
-# --- Cloudflare Workers 配置 ---
-# 必须与你的 Worker 脚本中设置的 authKey 保持完全一致
-WORKER_URL = "https://nameless-cherry-bb9c.2412.workers.dev/push-pool"
-WORKER_AUTH_KEY = "my-secret-aegis" 
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+WORKER_URL = "https://你的自定义域名.com/push-pool"
+WORKER_AUTH_KEY = "my-secret-aegis"
 
 def extract_ips(text):
-    """从文本中提取所有标准 IPv4 地址"""
-    return set(re.findall(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', text))
+    # 提取 IP 并过滤掉 1.0.1.1, 1.1.1.1, 0.0.0.0 等占位符
+    found = re.findall(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', text)
+    blacklist = {"1.0.1.1", "1.1.1.1", "1.0.0.1", "0.0.0.0", "127.0.0.1"}
+    return {ip for ip in found if ip not in blacklist}
 
 def fetch_ips():
-    """多源爬取 IP"""
     all_found = set()
     sources = [
         "https://api.uouin.com/cloudflare.html",
         "https://stock.hostmonit.com/CloudFlareYes"
     ]
-    
     for url in sources:
         try:
-            print(f"🌐 正在爬取: {url}")
-            resp = requests.get(url, headers=HEADERS, timeout=15)
+            resp = requests.get(url, timeout=15)
             ips = extract_ips(resp.text)
-            if ips:
-                all_found.update(ips)
-                print(f"✅ 成功抓取 {len(ips)} 个 IP")
-        except Exception as e:
-            print(f"❌ 抓取失败 {url}: {e}")
-    return sorted(list(all_found))
+            all_found.update(ips)
+            print(f"✅ 抓取 {url} 获得 {len(ips)} 个有效 IP")
+        except: pass
+    return all_found
 
-def update_repo(ips_list):
-    """同步更新 GitHub 仓库的 JSON 和 TXT 文件"""
-    if not ips_list:
-        print("⚠️ IP 列表为空，跳过仓库更新")
-        return []
-
-    # 初始化 GitHub 客户端
+def update_repo(found_ips):
     auth = Auth.Token(GITHUB_TOKEN)
     g = Github(auth=auth)
     repo = g.get_repo(REPO_NAME)
+    now_ts = int(time.time())
     update_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
-    # 1. 构建文件内容
-    db_content = {
-        "last_update": update_time,
-        "total_count": len(ips_list),
-        "ips": ips_list
-    }
-    json_str = json.dumps(db_content, indent=2, ensure_ascii=False)
-    
-    txt_content = f"# Aegis 优选 IP 列表\n# 更新时间: {update_time}\n# IP 总数: {len(ips_list)}\n\n"
-    txt_content += "\n".join(ips_list)
 
-    # 2. 更新或创建 JSON 文件
+    # 1. 读取旧数据库
+    db = {"last_update": "", "pool": {}}
     try:
         contents = repo.get_contents(FILE_JSON)
-        repo.update_file(FILE_JSON, f"🚀 Sync JSON {update_time}", json_str, contents.sha)
-        print(f"✅ 仓库文件已更新: {FILE_JSON}")
-    except Exception:
-        repo.create_file(FILE_JSON, "🎁 Init JSON", json_str)
-        print(f"🆕 仓库文件已创建: {FILE_JSON}")
+        db = json.loads(contents.decoded_content.decode())
+        json_sha = contents.sha
+    except:
+        json_sha = None
 
-    # 3. 更新或创建 TXT 视图文件 (本次修正重点)
-    try:
-        contents_txt = repo.get_contents(FILE_TXT)
-        repo.update_file(FILE_TXT, f"📝 Sync TXT {update_time}", txt_content, contents_txt.sha)
-        print(f"✅ 仓库文件已更新: {FILE_TXT}")
-    except Exception:
-        repo.create_file(FILE_TXT, "🆕 Init TXT", txt_content)
-        print(f"🆕 仓库文件已创建: {FILE_TXT}")
-        
-    return ips_list
+    # 2. 逻辑处理：解封与合并
+    new_pool = {}
+    # 保留旧库中未到期的封禁 IP
+    if "pool" in db:
+        for ip, info in db["pool"].items():
+            if info.get("ban_until", 0) > now_ts:
+                new_pool[ip] = info # 还在禁闭期，保留状态
 
-def push_to_workers(active_ips):
-    """将 IP 推送给 Cloudflare Workers 大脑"""
-    print(f"DEBUG: 准备推送 {len(active_ips)} 个 IP 到 Workers...")
-    if not active_ips: return
+    # 加入新抓取的 IP
+    for ip in found_ips:
+        if ip not in new_pool: # 如果不在禁闭期
+            new_pool[ip] = {
+                "added_at": update_time,
+                "ban_until": 0,
+                "fail_count": 0
+            }
 
-    payload = {"ips": active_ips}
-    headers = {
-        "Authorization": WORKER_AUTH_KEY, 
-        "Content-Type": "application/json"
+    # 3. 准备输出
+    active_ips = [ip for ip, info in new_pool.items() if info["ban_until"] <= now_ts]
+    
+    # 保证至少有一个保底 IP（如果抓取全失败）
+    display_ips = sorted(active_ips) if active_ips else ["1.1.1.1"]
+
+    db_to_save = {
+        "last_update": update_time,
+        "total_active": len(display_ips),
+        "pool": new_pool
     }
 
+    # 4. 同步 GitHub
+    json_str = json.dumps(db_to_save, indent=2)
+    txt_content = f"# Aegis 更新: {update_time}\n" + "\n".join(display_ips)
+
+    if json_sha:
+        repo.update_file(FILE_JSON, f"Update DB {update_time}", json_str, json_sha)
+    else:
+        repo.create_file(FILE_JSON, "Init DB", json_str)
+
     try:
-        response = requests.post(WORKER_URL, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            print(f"✅ Workers 大脑同步成功: {response.text}")
-        else:
-            print(f"❌ Workers 同步失败，状态码: {response.status_code}，响应: {response.text}")
+        txt_sha = repo.get_contents(FILE_TXT).sha
+        repo.update_file(FILE_TXT, f"Update TXT {update_time}", txt_content, txt_sha)
+    except:
+        repo.create_file(FILE_TXT, "Init TXT", txt_content)
+
+    return display_ips
+
+def push_to_workers(active_ips):
+    headers = {"Authorization": WORKER_AUTH_KEY, "Content-Type": "application/json"}
+    try:
+        # 注意这里推送给 Worker 的字段名要统一为 ips
+        requests.post(WORKER_URL, json={"ips": active_ips}, headers=headers, timeout=10)
+        print(f"🚀 已推送 {len(active_ips)} 个 IP 到 Workers 大脑")
     except Exception as e:
-        print(f"❌ 网络异常，无法连接至 Workers: {e}")
+        print(f"❌ 推送失败: {e}")
 
 if __name__ == "__main__":
-    # 执行全流程
-    raw_ips = fetch_ips()
-    active_ips = update_repo(raw_ips)
-    push_to_workers(active_ips)
-    print(f"🔥 所有任务执行完毕！当前有效弹药: {len(active_ips)}")
+    found = fetch_ips()
+    active = update_repo(found)
+    push_to_workers(active)
